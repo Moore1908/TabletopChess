@@ -8,13 +8,24 @@ public class ChessGame : MonoBehaviour
 {
     public float squareSize = 0.07f;   // width of one square in metres
     public TMP_Text statusText;         // optional: a TextMeshPro text to show messages
-    public AudioClip moveSound, captureSound, winSound;
+    // Sounds: if left empty, they load automatically from Assets/Resources/ChessAudio.
+    public AudioClip pickupSound, moveSound, captureSound, illegalSound, hitSound, winSound;
 
     // Finite State Machine: whose turn it is, or game over.
     enum State { WhiteTurn, BlackTurn, GameOver }
     State state;
 
     ChessPiece[,] board = new ChessPiece[8, 8];
+
+    void Awake()
+    {
+        if (pickupSound == null)  pickupSound  = Resources.Load<AudioClip>("ChessAudio/pickup");
+        if (moveSound == null)    moveSound    = Resources.Load<AudioClip>("ChessAudio/move");
+        if (captureSound == null) captureSound = Resources.Load<AudioClip>("ChessAudio/capture");
+        if (illegalSound == null) illegalSound = Resources.Load<AudioClip>("ChessAudio/illegal");
+        if (hitSound == null)     hitSound     = Resources.Load<AudioClip>("ChessAudio/hit");
+        if (winSound == null)     winSound     = Resources.Load<AudioClip>("ChessAudio/win");
+    }
 
     void Start() => ChangeState(State.WhiteTurn);
 
@@ -50,7 +61,12 @@ public class ChessGame : MonoBehaviour
         else
         {
             Snap(p); // put it back where it was
-            if (state != State.GameOver && target != p.square) Say("Illegal move! " + turn + "'s turn");
+            if (state != State.GameOver && target != p.square)
+            {
+                Say("Illegal move! " + turn + "'s turn");
+                Play(illegalSound, p.transform.position);
+            }
+            else Play(moveSound, p.transform.position, 0.5f);
         }
     }
 
@@ -63,9 +79,9 @@ public class ChessGame : MonoBehaviour
             Vector3 direction = victim.transform.position - SquareToWorld(p.square);
             direction.y = 0;
             victim.KnockOff(direction.normalized);
-            Play(captureSound);
+            Play(captureSound, victim.transform.position);
         }
-        else Play(moveSound);
+        else Play(moveSound, SquareToWorld(to));
 
         board[p.square.x, p.square.y] = null;
         board[to.x, to.y] = p;
@@ -79,7 +95,7 @@ public class ChessGame : MonoBehaviour
         {
             state = State.GameOver;
             Say(p.side + " wins!");
-            Play(winSound);
+            Play(winSound, transform.position);
         }
         else ChangeState(p.side == Side.White ? State.BlackTurn : State.WhiteTurn);
     }
@@ -147,9 +163,10 @@ public class ChessGame : MonoBehaviour
         Debug.Log(message);
     }
 
-    void Play(AudioClip clip)
+    // 3D sound at a position, so in VR you hear it from where it happened.
+    public void Play(AudioClip clip, Vector3 position, float volume = 1f)
     {
-        if (clip != null) AudioSource.PlayClipAtPoint(clip, transform.position);
+        if (clip != null) AudioSource.PlayClipAtPoint(clip, position, volume);
     }
 
     // Hook this up to a VR button to start again.

@@ -23,19 +23,44 @@ public class ChessPiece : MonoBehaviour
     {
         game = FindFirstObjectByType<ChessGame>();
 
-        // Make sure the piece can be grabbed in VR.
+        // Physics can only move a mesh collider if it is convex.
+        // Without this, captured pieces fall through the board and floor.
+        foreach (var mc in GetComponentsInChildren<MeshCollider>()) mc.convex = true;
         if (GetComponentInChildren<Collider>() == null) AddBoxCollider();
+
         rb = GetComponent<Rigidbody>();
         if (rb == null) rb = gameObject.AddComponent<Rigidbody>();
         rb.isKinematic = true;
+        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative; // fast pieces don't pass through things
 
+        // Make sure the piece can be grabbed in VR.
         grab = GetComponent<XRGrabInteractable>();
         if (grab == null) grab = gameObject.AddComponent<XRGrabInteractable>();
         grab.throwOnDetach = false;
         grab.useDynamicAttach = true;
+        grab.selectEntered.AddListener(_ => game.Play(game.pickupSound, transform.position, 0.6f));
         grab.selectExited.AddListener(_ => game.OnPieceDropped(this));
 
+        // Runs after XR has moved the held piece, just before each frame is drawn.
+        Application.onBeforeRender += KeepAboveBoard;
+
         game.Register(this);
+    }
+
+    void OnDestroy() => Application.onBeforeRender -= KeepAboveBoard;
+
+    void LateUpdate() => KeepAboveBoard();
+
+    // While held, don't let the piece sink into the board (vector math in the board's space).
+    void KeepAboveBoard()
+    {
+        if (grab == null || !grab.isSelected || game == null) return;
+        Vector3 local = game.transform.InverseTransformPoint(transform.position);
+        if (local.y < height)
+        {
+            local.y = height;
+            transform.position = game.transform.TransformPoint(local);
+        }
     }
 
     // Captured: turn on physics and knock the piece off the board.
@@ -46,6 +71,14 @@ public class ChessPiece : MonoBehaviour
         rb.AddForce(direction * 1.5f + Vector3.up * 2f, ForceMode.VelocityChange);
         rb.AddTorque(Random.insideUnitSphere * 10f, ForceMode.VelocityChange);
         Destroy(gameObject, 3f);
+    }
+
+    // Knock sound when a flying (captured) piece hits the table, floor or another piece.
+    void OnCollisionEnter(Collision hit)
+    {
+        if (rb.isKinematic) return;
+        float speed = hit.relativeVelocity.magnitude;
+        if (speed > 0.3f) game.Play(game.hitSound, transform.position, Mathf.Clamp01(speed / 3f));
     }
 
     // Adds a box collider that fits the model, if the model doesn't have one.
