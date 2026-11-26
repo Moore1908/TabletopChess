@@ -44,6 +44,7 @@ public class ChessPiece : MonoBehaviour
         // Runs after XR has moved the held piece, just before each frame is drawn.
         Application.onBeforeRender += KeepAboveBoard;
 
+        game.ColourPiece(this);
         game.Register(this);
     }
 

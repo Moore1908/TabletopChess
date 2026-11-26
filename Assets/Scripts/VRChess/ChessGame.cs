@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using TMPro;
+using Unity.XR.CoreUtils;
 
 // Put this on an empty object at the centre of the board's top surface.
 // White starts on the side nearest the player. Capture the King to win.
@@ -11,6 +12,17 @@ public class ChessGame : MonoBehaviour
     // Sounds: if left empty, they load automatically from Assets/Resources/ChessAudio.
     public AudioClip pickupSound, moveSound, captureSound, illegalSound, hitSound, winSound;
 
+    [Header("Piece colours")]
+    public Color whiteColour = new Color(0.92f, 0.92f, 0.9f);
+    public Color blackColour = new Color(0.1f, 0.1f, 0.12f);
+
+    [Header("Player view")]
+    public XROrigin playerRig;           // found automatically if left empty
+    public float viewDistance = 0.45f;   // metres from the board centre to the player
+    public bool switchSidesEachTurn = true;
+
+    Material whiteMaterial, blackMaterial;
+
     // Finite State Machine: whose turn it is, or game over.
     enum State { WhiteTurn, BlackTurn, GameOver }
     State state;
@@ -19,12 +31,15 @@ public class ChessGame : MonoBehaviour
 
     void Awake()
     {
-        if (pickupSound == null)  pickupSound  = Resources.Load<AudioClip>("ChessAudio/pickup");
-        if (moveSound == null)    moveSound    = Resources.Load<AudioClip>("ChessAudio/move");
-        if (captureSound == null) captureSound = Resources.Load<AudioClip>("ChessAudio/capture");
-        if (illegalSound == null) illegalSound = Resources.Load<AudioClip>("ChessAudio/illegal");
-        if (hitSound == null)     hitSound     = Resources.Load<AudioClip>("ChessAudio/hit");
-        if (winSound == null)     winSound     = Resources.Load<AudioClip>("ChessAudio/win");
+        if (pickupSound == null)  pickupSound  = LoadSound("pickup");
+        if (moveSound == null)    moveSound    = LoadSound("move");
+        if (captureSound == null) captureSound = LoadSound("capture");
+        if (illegalSound == null) illegalSound = LoadSound("illegal");
+        if (hitSound == null)     hitSound     = LoadSound("hit");
+        if (winSound == null)     winSound     = LoadSound("win");
+
+        MakeMaterials();
+        if (playerRig == null) playerRig = FindFirstObjectByType<XROrigin>();
     }
 
     void Start() => ChangeState(State.WhiteTurn);
@@ -32,8 +47,74 @@ public class ChessGame : MonoBehaviour
     void ChangeState(State next)
     {
         state = next;
-        if (state == State.WhiteTurn) Say("White's turn");
-        if (state == State.BlackTurn) Say("Black's turn");
+        if (state == State.WhiteTurn) { Say("White's turn"); MovePlayerTo(Side.White); }
+        if (state == State.BlackTurn) { Say("Black's turn"); MovePlayerTo(Side.Black); }
+    }
+
+    // ---- player view ----
+
+    // Stand the player on their own side of the board, facing it.
+    void MovePlayerTo(Side side)
+    {
+        if (playerRig == null) return;
+        if (side == Side.Black && !switchSidesEachTurn) return;
+
+        // Vector math: a point behind the board edge on this side, on the floor.
+        Vector3 towardsPlayer = side == Side.White ? -transform.forward : transform.forward;
+        Vector3 spot = transform.position + towardsPlayer * viewDistance;
+        spot.y = playerRig.transform.position.y;
+
+        playerRig.transform.SetPositionAndRotation(spot, Quaternion.LookRotation(-towardsPlayer, Vector3.up));
+
+        // No headset (testing in the editor): tilt the view down so the board is in sight.
+        if (!UnityEngine.XR.XRSettings.isDeviceActive && playerRig.CameraFloorOffsetObject != null)
+        {
+            Transform offset = playerRig.CameraFloorOffsetObject.transform;
+            Vector3 eye = playerRig.Camera.transform.position;
+            Vector3 toBoard = transform.position - eye;
+            float pitch = Mathf.Atan2(-toBoard.y, new Vector2(toBoard.x, toBoard.z).magnitude) * Mathf.Rad2Deg;
+            offset.localRotation = Quaternion.Euler(pitch, 0, 0);
+        }
+    }
+
+    // ---- piece colours ----
+
+    // The chess pack's material uses an old shader that doesn't work in URP,
+    // so each side gets a plain URP material in its colour.
+    void MakeMaterials()
+    {
+        var probe = GameObject.CreatePrimitive(PrimitiveType.Cube); // its default material is URP Lit
+        Material baseMat = probe.GetComponent<Renderer>().sharedMaterial;
+        if (Application.isPlaying) Destroy(probe); else DestroyImmediate(probe);
+
+        whiteMaterial = new Material(baseMat) { name = "White Piece", color = whiteColour };
+        blackMaterial = new Material(baseMat) { name = "Black Piece", color = blackColour };
+    }
+
+    public void ColourPiece(ChessPiece p)
+    {
+        Material m = p.side == Side.White ? whiteMaterial : blackMaterial;
+        foreach (var r in p.GetComponentsInChildren<Renderer>())
+        {
+            var mats = r.sharedMaterials;
+            for (int i = 0; i < mats.Length; i++) mats[i] = m;
+            r.sharedMaterials = mats;
+        }
+    }
+
+    // Use from the ⋮ menu on this component to see the colours in the Scene view without pressing Play.
+    [ContextMenu("Apply Piece Colours In Scene")]
+    void ApplyColoursInScene()
+    {
+        MakeMaterials();
+        foreach (var p in FindObjectsByType<ChessPiece>(FindObjectsSortMode.None))
+        {
+#if UNITY_EDITOR
+            foreach (var r in p.GetComponentsInChildren<Renderer>())
+                UnityEditor.Undo.RecordObject(r, "Apply Piece Colours");
+#endif
+            ColourPiece(p);
+        }
     }
 
     // Called by each piece when the game starts.
@@ -161,6 +242,15 @@ public class ChessGame : MonoBehaviour
     {
         if (statusText != null) statusText.text = message;
         Debug.Log(message);
+    }
+
+    // Looks in Assets/Resources/ChessAudio (or a ChessAudio folder inside it).
+    AudioClip LoadSound(string name)
+    {
+        AudioClip clip = Resources.Load<AudioClip>("ChessAudio/" + name);
+        if (clip == null) clip = Resources.Load<AudioClip>("ChessAudio/ChessAudio/" + name);
+        if (clip == null) Debug.LogWarning("Sound not found: " + name + ".wav in Assets/Resources/ChessAudio");
+        return clip;
     }
 
     // 3D sound at a position, so in VR you hear it from where it happened.
